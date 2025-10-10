@@ -22,11 +22,12 @@ BiocManager::install("edgeR")
 bam_dir <- "C:/Users/lenam/OneDrive/Documents/Beans/RNAseq Results/02.Bam_Oct2024"
 bam_files <- list.files(bam_dir, pattern = "*.bam$", full.names = TRUE)
 
+# --- FIXED extraction of time_point and treatment ---
+# Example expected filename pattern: "A_BL_1.bam" or "B_ET_2.bam"
 sample_table <- data.frame(
   file = bam_files,
-  time_point = substr(basename(bam_files), 1, 1),
-  treatment = ifelse(grepl("_C\\d+\\.bam$", basename(bam_files)), "C", 
-                     sub(".*_([A-Z]+)_\\d+\\.bam$", "\\1", basename(bam_files))),
+  time_point = sub("^([A-Z])_.*$", "\\1", basename(bam_files)),             # Extract the first letter before first underscore
+  treatment = sub("^[A-Z]_([A-Z]+)_\\d+\\.bam$", "\\1", basename(bam_files)), # Extract treatment (middle part)
   stringsAsFactors = FALSE
 )
 
@@ -58,8 +59,8 @@ metadata <- data.frame(
   treatment = sample_table$treatment
 )
 
-## At this point: gene_counts: Rows = Gene ID number (with "gene_PHAVU_" removed) 
-## and Columns = Sample names (cleaned to only contain sample identifiers)
+## At this point: gene_counts: Rows = Gene IDs (with "gene_PHAVU_" removed) 
+## Columns = Sample names (cleaned), and metadata aligned properly.
 
 
 
@@ -74,47 +75,32 @@ dge <- DGEList(counts = gene_counts)
 cpm_values <- cpm(dge)
 
 # Group Samples by Treatment and Timepoint
-
-# Extract groups based on metadata
 sample_groups <- paste(metadata$treatment, metadata$time_point, sep = "_")
 
 # Get unique groups
 unique_groups <- unique(sample_groups)
-
 print(unique_groups)
 
 # Apply Filtering Per Group
-
-# Create a logical matrix to store whether each gene meets the 10 CPM threshold per group
 keep_genes_per_group <- sapply(unique_groups, function(group) {
-  # Get sample indices for this group
   sample_indices <- which(sample_groups == group)
-  
-  # Subset the columns as a matrix, even if there's only one sample
   mat <- cpm_values[, sample_indices, drop = FALSE]
-  
-  # Check if the gene has at least 10 CPM in **all** samples of this group
   matrixStats::rowMins(mat) >= 10
 })
 
-# Keep genes that pass the filter in **at least one group**
 keep_genes <- rowSums(keep_genes_per_group) > 0
-
-
 
 # Apply filtering
 filtered_gene_counts <- gene_counts[keep_genes, ]
 
-# Check dimensions of the filtered dataset (12586 genes in 67 samples)
+# Check dimensions before and after filtering
+dim(gene_counts)
 dim(filtered_gene_counts)
 
-dim(gene_counts)  # Before filtering
-dim(filtered_gene_counts)  # After filtering
-
-#rewrite the old gene_counts
+# Rewrite gene_counts with filtered data
 gene_counts <- filtered_gene_counts
 
-#Download to computer
+# Confirm matrix type
 class(gene_counts)
 
 
@@ -126,25 +112,19 @@ library(writexl)
 # -----------------------------
 # Export filtered gene counts to Excel
 # -----------------------------
-# Convert matrix to data frame and add GeneID as first column
 gene_counts_df <- data.frame(
   GeneID = rownames(gene_counts),
   gene_counts,
   check.names = FALSE
 )
-
-# Write to Excel
 write_xlsx(gene_counts_df, "gene_counts.xlsx")
 
-# Convert metadata to a standard data frame for Excel
+# -----------------------------
+# Export metadata to Excel
+# -----------------------------
 metadata_df <- data.frame(
   SampleID = rownames(metadata),
   metadata,
   check.names = FALSE
 )
-
-# Save to Excel
 write_xlsx(metadata_df, "metadata.xlsx")
-
-
-
