@@ -136,6 +136,15 @@ gene_counts_df <- data.frame(
 # Write to Excel
 write_xlsx(gene_counts_df, "gene_counts.xlsx")
 
+# Convert metadata to a standard data frame for Excel
+metadata_df <- data.frame(
+  SampleID = rownames(metadata),
+  metadata,
+  check.names = FALSE
+)
+
+# Save to Excel
+write_xlsx(metadata_df, "metadata.xlsx")
 
 
 
