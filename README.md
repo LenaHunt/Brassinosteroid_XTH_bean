@@ -5,7 +5,12 @@ Note that the three treatments are abreviated as BL for brassinolide-treated (a 
 
 The R codes used to generate visuals are listed below with the Figure from the paper.
 
-When running codes from the RNAseq data, it is important to first convert the .BAM files into gene_counts and metadata which can be used in the next steps. The order in which the codes should be run are: 1.) BAM_fules_to_gene_counts, 2.) DEG and volcano plots (this will provide the dds which is necessary for the heatmap), 3.) XTH Gene Expression Heatmap
+When running codes from the RNAseq data, it is important to run them in sequence:
+
+First, convert the .BAM files into gene_counts and metadata. .BAM files can be downloaded from (website) and the resulting gene_counts.xlsx and metadata.xlsx are available for download to run the next steps if you choose to analyze the data from there.
+Next, 
+Third, run the DEG and volcano plots code which will provide the dds necessary for the next step (heatmap)
+Fourth,  XTH Gene Expression Heatmap.
 
 
 Guide to Scripts by Figure
