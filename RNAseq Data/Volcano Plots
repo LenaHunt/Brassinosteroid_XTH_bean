@@ -1,1 +1,205 @@
+# Load Libraries
+library(DESeq2)
+library(ggplot2)
 
+
+# Remove rows where treatment starts with "A_C" (these are pre-treatment plants)
+metadata_filtered <- metadata[!grepl("^A_C\\d+", metadata$treatment), ]
+unique(metadata_filtered$treatment)
+
+
+# Ensure column names of gene_counts match metadata row names (and maintain order)
+gene_counts_filtered <- gene_counts[, rownames(metadata_filtered)]
+
+# Ensure treatment and time_point are factors
+metadata_filtered$treatment <- droplevels(factor(metadata_filtered$treatment))
+metadata_filtered$time_point <- droplevels(factor(metadata_filtered$time_point))
+
+# Create DESeq2 dataset
+dds <- DESeqDataSetFromMatrix(countData = gene_counts_filtered,
+                              colData = metadata_filtered,
+                              design = ~ treatment * time_point)
+dds <- DESeq(dds)  # Run DESeq2
+
+# Function to subset by timepoint and run DESeq2
+run_DESeq_for_timepoint <- function(dds, timepoint) {
+  dds_subset <- dds[, colData(dds)$time_point == timepoint]  # Corrected subsetting
+  dds_subset <- DESeqDataSetFromMatrix(countData = counts(dds_subset), 
+                                       colData = colData(dds_subset), 
+                                       design = ~ treatment)  # Model only treatment
+  dds_subset <- DESeq(dds_subset)  # Run DESeq2
+  return(dds_subset)
+}
+
+# Run DESeq2 separately for Timepoint A and B
+dds_A <- run_DESeq_for_timepoint(dds, "A")
+dds_B <- run_DESeq_for_timepoint(dds, "B")
+
+# Function to extract full DESeq2 results for different comparisons
+extract_full_results <- function(dds_subset, comparison) {
+  treatments <- levels(dds_subset$treatment)
+  if (!all(comparison %in% treatments)) {
+    warning("Skipping comparison ", paste(comparison, collapse = " vs "), " because one or both treatments are missing.")
+    return(NULL)
+  }
+  res <- results(dds_subset, contrast = c("treatment", comparison[1], comparison[2]), independentFiltering = FALSE)
+  return(res)
+}
+
+# Define comparisons
+comparisons <- list(
+  "BL_vs_ET" = c("BL", "ET"),
+  "BL_vs_BZ" = c("BL", "BZ"),
+  "BZ_vs_ET" = c("BZ", "ET")
+)
+
+# Extract full results for each comparison and timepoint
+results_list_A <- lapply(comparisons, function(comp) extract_full_results(dds_A, comp))
+results_list_B <- lapply(comparisons, function(comp) extract_full_results(dds_B, comp))
+
+# Function to count up- and downregulated genes
+count_up_down <- function(res) {
+  if (is.null(res)) return(c(up = NA, down = NA))  # Handle NULL results
+  up <- sum(res$log2FoldChange > 1 & res$padj < 0.05, na.rm = TRUE)
+  down <- sum(res$log2FoldChange < -1 & res$padj < 0.05, na.rm = TRUE)
+  return(c(up = up, down = down))
+}
+
+# Count genes at each timepoint for each comparison
+counts_A <- lapply(results_list_A, count_up_down)
+counts_B <- lapply(results_list_B, count_up_down)
+
+
+# Print results
+cat("Timepoint A:\n")
+for (comp in names(counts_A)) {
+  up <- ifelse(is.na(counts_A[[comp]]["up"]), 0, counts_A[[comp]]["up"])
+  down <- ifelse(is.na(counts_A[[comp]]["down"]), 0, counts_A[[comp]]["down"])
+  cat(comp, ": Upregulated =", up, ", Downregulated =", down, "\n")
+}
+
+cat("\nTimepoint B:\n")
+for (comp in names(counts_B)) {
+  up <- ifelse(is.na(counts_B[[comp]]["up"]), 0, counts_B[[comp]]["up"])
+  down <- ifelse(is.na(counts_B[[comp]]["down"]), 0, counts_B[[comp]]["down"])
+  cat(comp, ": Upregulated =", up, ", Downregulated =", down, "\n")
+}
+
+
+# Save full results
+for (comp in names(results_list_A)) {
+  if (!is.null(results_list_A[[comp]])) {
+    write.csv(as.data.frame(results_list_A[[comp]]), paste0("DEG_results_", comp, "_TimepointA.csv"))
+  }
+}
+for (comp in names(results_list_B)) {
+  if (!is.null(results_list_B[[comp]])) {
+    write.csv(as.data.frame(results_list_B[[comp]]), paste0("DEG_results_", comp, "_TimepointB.csv"))
+  }
+}
+
+
+highlight_genes <- c(
+  "001G016050", "001G016050", "001G016100", "001G021300", "002G026700", "002G026800",
+  "002G158800", "002G184800", "002G206900", "002G206900", "002G206900", "002G207000",
+  "002G291800", "003G040300", "004G041700", "005G005900", "005G118700",
+  "006G208100", "007G167400", "008G028800", "008G028800", "008G060300",
+  "009G056400", "009G064300", "010G101100", "011G099600", "002G217900",
+  "006G197000", "008G050700", "008G050700", "010G035800", "010G035800",
+  "003G037600", "005G079400", "008G025500"
+  
+  
+)
+
+library(ggplot2)
+library(ggrepel)
+
+plot_volcano <- function(res, timepoint, comparison, 
+                         up_color = "red", down_color = "purple", nonsig_color = "grey",
+                         genes_to_annotate = NULL) {
+  
+  # Prepare dataframe
+  res_df <- as.data.frame(res)
+  res_df <- res_df[!is.na(res_df$pvalue), ]
+  res_df$logP <- -log10(res_df$pvalue)
+  res_df$gene <- rownames(res_df)
+  
+  # Define significance
+  res_df$Significance <- "Not Significant"
+  res_df$Significance[res_df$log2FoldChange > 1 & res_df$padj < 0.05] <- "Upregulated"
+  res_df$Significance[res_df$log2FoldChange < -1 & res_df$padj < 0.05] <- "Downregulated"
+  
+  # Color map
+  color_map <- c("Upregulated" = up_color, "Downregulated" = down_color, "Not Significant" = nonsig_color)
+  
+  # Build base plot
+  p <- ggplot(res_df, aes(x = log2FoldChange, y = logP, color = Significance)) +
+    geom_point(alpha = 0.7) +
+    scale_color_manual(values = color_map) +
+    theme_minimal() +
+    labs(title = paste("Volcano Plot of", comparison, "- Timepoint", timepoint),
+         x = "Log2 Fold Change", y = "-log10 p-value") +
+    xlim(-10, 10) +
+    ylim(0, 25) +
+    theme(legend.title = element_blank())
+  
+  # Add black points and labels for significant genes only
+  if (!is.null(genes_to_annotate)) {
+    highlight_df <- res_df[
+      res_df$gene %in% genes_to_annotate & 
+        res_df$Significance != "Not Significant", 
+    ]
+    
+    p <- p + geom_point(data = highlight_df, aes(x = log2FoldChange, y = logP),
+                        color = "black", size = 3) +
+      geom_text_repel(data = highlight_df, aes(label = gene),
+                      color = "black", size = 5, max.overlaps = Inf,
+                      box.padding = 0.8, point.padding = 0.5,
+                      force = 2, force_pull = 0.2,
+                      min.segment.length = 0)
+  }
+  
+  print(p)
+}
+
+
+# NOW Run the Loop
+for (comp in names(results_list_A)) {
+  plot_volcano(results_list_A[[comp]], "A", comp, genes_to_annotate = highlight_genes)
+  plot_volcano(results_list_B[[comp]], "B", comp, genes_to_annotate = highlight_genes)
+}
+
+
+
+
+# Summarize DEGs
+summarize_DEGs <- function(res, timepoint, comparison) {
+  total_genes <- nrow(res)  # Total genes tested
+  upregulated <- sum(res$log2FoldChange > 1 & res$padj < 0.05, na.rm = TRUE)
+  downregulated <- sum(res$log2FoldChange < -1 & res$padj < 0.05, na.rm = TRUE)
+  
+  # Compute percentages
+  up_percent <- round((upregulated / total_genes) * 100, 2)
+  down_percent <- round((downregulated / total_genes) * 100, 2)
+  
+  # Print summary
+  cat("\n🔹 **Timepoint", timepoint, "-", comparison, "**\n")
+  cat("Total genes tested:", total_genes, "\n")
+  cat("Upregulated genes:", upregulated, "(", up_percent, "%)\n")
+  cat("Downregulated genes:", downregulated, "(", down_percent, "%)\n")
+  
+  # Return a list (optional)
+  return(list(
+    Comparison = comparison,
+    Timepoint = timepoint,
+    Total_Genes = total_genes,
+    Upregulated = upregulated,
+    Up_Percent = up_percent,
+    Downregulated = downregulated,
+    Down_Percent = down_percent
+  ))
+}
+
+# Run summarization for all comparisons and timepoints
+summary_list_A <- lapply(names(results_list_A), function(comp) summarize_DEGs(results_list_A[[comp]], "A", comp))
+summary_list_B <- lapply(names(results_list_B), function(comp) summarize_DEGs(results_list_B[[comp]], "B", comp))
