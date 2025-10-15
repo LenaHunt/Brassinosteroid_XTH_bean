@@ -1,12 +1,10 @@
-# Load Libraries
+# Libraries
 library(DESeq2)
 library(ggplot2)
+library(ggrepel)
 
-
-# Remove rows where treatment starts with "A_C" (these are pre-treatment plants)
-metadata_filtered <- metadata[!grepl("^A_C\\d+", metadata$treatment), ]
-unique(metadata_filtered$treatment)
-
+# Remove treatment "C" (which has missing values for time_point "B")
+metadata_filtered <- metadata[metadata$treatment != "C", ]
 
 # Ensure column names of gene_counts match metadata row names (and maintain order)
 gene_counts_filtered <- gene_counts[, rownames(metadata_filtered)]
@@ -98,108 +96,76 @@ for (comp in names(results_list_B)) {
   }
 }
 
-
+# Define your XTH (or other) genes of interest
 highlight_genes <- c(
-  "001G016050", "001G016050", "001G016100", "001G021300", "002G026700", "002G026800",
-  "002G158800", "002G184800", "002G206900", "002G206900", "002G206900", "002G207000",
-  "002G291800", "003G040300", "004G041700", "005G005900", "005G118700",
-  "006G208100", "007G167400", "008G028800", "008G028800", "008G060300",
-  "009G056400", "009G064300", "010G101100", "011G099600", "002G217900",
-  "006G197000", "008G050700", "008G050700", "010G035800", "010G035800",
-  "003G037600", "005G079400", "008G025500"
-  
-  
+  "004G168700", "002G311200", "009G233200", "003G137600", "003G147500",
+  "003G147600", "003G147400", "003G143332", "003G147700", "003G147300",
+  "002G244000", "001G265300", "006G033800", "008G129100", "008G129900",
+  "007G148500", "001G179900", "005G130900", "011G085200", "003G052400",
+  "002G136200", "002G182000", "003G014400", "005G111300", "011G107000",
+  "003G231900", "002G008400", "001G098200", "001G098300", "004G062400",
+  "004G111800", "007G052800", "007G048300"
 )
 
-library(ggplot2)
-library(ggrepel)
 
-plot_volcano <- function(res, timepoint, comparison, 
-                         up_color = "red", down_color = "purple", nonsig_color = "grey",
+
+
+
+
+# Enhanced Volcano Plot Function (merged from both scripts)
+plot_volcano <- function(res, timepoint, comparison,
+                         up_color = "orchid1", down_color = "orchid4", nonsig_color = "turquoise",
                          genes_to_annotate = NULL) {
   
-  # Prepare dataframe
   res_df <- as.data.frame(res)
   res_df <- res_df[!is.na(res_df$pvalue), ]
   res_df$logP <- -log10(res_df$pvalue)
   res_df$gene <- rownames(res_df)
   
-  # Define significance
+  # Define significance categories
   res_df$Significance <- "Not Significant"
   res_df$Significance[res_df$log2FoldChange > 1 & res_df$padj < 0.05] <- "Upregulated"
   res_df$Significance[res_df$log2FoldChange < -1 & res_df$padj < 0.05] <- "Downregulated"
   
-  # Color map
-  color_map <- c("Upregulated" = up_color, "Downregulated" = down_color, "Not Significant" = nonsig_color)
+  # Color mapping
+  color_map <- c("Upregulated" = up_color,
+                 "Downregulated" = down_color,
+                 "Not Significant" = nonsig_color)
   
-  # Build base plot
+  # Base volcano plot
   p <- ggplot(res_df, aes(x = log2FoldChange, y = logP, color = Significance)) +
     geom_point(alpha = 0.7) +
-    scale_color_manual(values = color_map) +
     theme_minimal() +
     labs(title = paste("Volcano Plot of", comparison, "- Timepoint", timepoint),
          x = "Log2 Fold Change", y = "-log10 p-value") +
+    scale_color_manual(values = color_map) +
     xlim(-10, 10) +
     ylim(0, 25) +
     theme(legend.title = element_blank())
   
-  # Add black points and labels for significant genes only
+  # Highlight and label selected genes (only if provided)
   if (!is.null(genes_to_annotate)) {
     highlight_df <- res_df[
-      res_df$gene %in% genes_to_annotate & 
-        res_df$Significance != "Not Significant", 
+      res_df$gene %in% genes_to_annotate & res_df$Significance != "Not Significant",
     ]
     
-    p <- p + geom_point(data = highlight_df, aes(x = log2FoldChange, y = logP),
-                        color = "black", size = 3) +
-      geom_text_repel(data = highlight_df, aes(label = gene),
-                      color = "black", size = 5, max.overlaps = Inf,
-                      box.padding = 0.8, point.padding = 0.5,
-                      force = 2, force_pull = 0.2,
-                      min.segment.length = 0)
+    if (nrow(highlight_df) > 0) {
+      p <- p +
+        geom_point(data = highlight_df, aes(x = log2FoldChange, y = logP),
+                   color = "black", size = 3) +
+        geom_text_repel(data = highlight_df, aes(label = gene),
+                        color = "black", size = 4.5, max.overlaps = Inf,
+                        box.padding = 0.8, point.padding = 0.5,
+                        force = 2, force_pull = 0.2,
+                        min.segment.length = 0)
+    }
   }
   
   print(p)
 }
 
-
-# NOW Run the Loop
+# Run the loop as before — now with highlighting enabled
 for (comp in names(results_list_A)) {
   plot_volcano(results_list_A[[comp]], "A", comp, genes_to_annotate = highlight_genes)
   plot_volcano(results_list_B[[comp]], "B", comp, genes_to_annotate = highlight_genes)
 }
-
-
-
-
-# Summarize DEGs
-summarize_DEGs <- function(res, timepoint, comparison) {
-  total_genes <- nrow(res)  # Total genes tested
-  upregulated <- sum(res$log2FoldChange > 1 & res$padj < 0.05, na.rm = TRUE)
-  downregulated <- sum(res$log2FoldChange < -1 & res$padj < 0.05, na.rm = TRUE)
-  
-  # Compute percentages
-  up_percent <- round((upregulated / total_genes) * 100, 2)
-  down_percent <- round((downregulated / total_genes) * 100, 2)
-  
-  # Print summary
-  cat("\n🔹 **Timepoint", timepoint, "-", comparison, "**\n")
-  cat("Total genes tested:", total_genes, "\n")
-  cat("Upregulated genes:", upregulated, "(", up_percent, "%)\n")
-  cat("Downregulated genes:", downregulated, "(", down_percent, "%)\n")
-  
-  # Return a list (optional)
-  return(list(
-    Comparison = comparison,
-    Timepoint = timepoint,
-    Total_Genes = total_genes,
-    Upregulated = upregulated,
-    Up_Percent = up_percent,
-    Downregulated = downregulated,
-    Down_Percent = down_percent
-  ))
-}
-
-# Run summarization for all comparisons and timepoints
-summary_list_A <- lapply(names(results_list_A), function(comp) summarize_DEGs(results_list_A[[comp]], "A", comp))
-summary_list_B <- lapply(names(results_list_B), function(comp) summarize_DEGs(results_list_B[[comp]], "B", comp))
