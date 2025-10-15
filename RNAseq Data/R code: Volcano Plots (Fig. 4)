@@ -1,17 +1,30 @@
-# Libraries
+### Libraries
 library(DESeq2)
 library(ggplot2)
 library(ggrepel)
 
-# Remove treatment "C" (which has missing values for time_point "B")
-metadata_filtered <- metadata[metadata$treatment != "C", ]
+metadata <- as.data.frame(metadata)
 
-# Ensure column names of gene_counts match metadata row names (and maintain order)
-gene_counts_filtered <- gene_counts[, rownames(metadata_filtered)]
+# Remove pre-treatment samples
+metadata_filtered <- metadata[!grepl("^A_C", metadata$SampleID), ]
 
-# Ensure treatment and time_point are factors
+# Remove treatment "C"
+metadata_filtered <- metadata_filtered[metadata_filtered$treatment != "C", ]
+
+# Set rownames to SampleID
+rownames(metadata_filtered) <- metadata_filtered$SampleID
+
+# Subset gene_counts_filtered to match
+gene_counts_filtered <- gene_counts[, rownames(metadata_filtered), drop = FALSE]
+
+# Convert to factors
 metadata_filtered$treatment <- droplevels(factor(metadata_filtered$treatment))
 metadata_filtered$time_point <- droplevels(factor(metadata_filtered$time_point))
+
+# Check
+table(metadata_filtered$treatment, metadata_filtered$time_point)
+all(rownames(metadata_filtered) == colnames(gene_counts_filtered))
+
 
 # Create DESeq2 dataset
 dds <- DESeqDataSetFromMatrix(countData = gene_counts_filtered,
