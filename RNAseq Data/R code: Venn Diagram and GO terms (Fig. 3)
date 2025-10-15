@@ -1,1 +1,259 @@
+# Load libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggvenn)
+library(AnnotationDbi)
+library(GO.db)
+library(patchwork)
 
+# Settings
+padj_cutoff <- 0.05
+lfc_cutoff  <- 1
+topN <- 10  # for GO plots
+
+# Use the DEG results, but first we need to format them and add annotations
+
+# List all your DEG data frame variable names
+deg_names <- c(
+  "DEG_results_BL_vs_BZ_TimepointA",
+  "DEG_results_BL_vs_ET_TimepointA",
+  "DEG_results_BZ_vs_ET_TimepointA",
+  "DEG_results_BL_vs_BZ_TimepointB",
+  "DEG_results_BL_vs_ET_TimepointB",
+  "DEG_results_BZ_vs_ET_TimepointB"
+)
+
+# Loop through existing data frames
+for (n in deg_names) {
+  df <- get(n)
+  
+  # Handle the case where the first column is called "...1" or blank
+  first_col <- colnames(df)[1]
+  if (first_col %in% c("", "X", "X1", "V1", "...1")) {
+    colnames(df)[1] <- "gene_id"
+  }
+  
+  
+  # Confirm the column now exists
+  if (!"gene_id" %in% colnames(df)) {
+    stop(paste("Could not find gene_id column in", n))
+  }
+  
+  # Make sure gene_id is character
+  df$gene_id <- as.character(df$gene_id)
+  
+  # Reassign back to global environment
+  assign(n, df, envir = .GlobalEnv)
+}
+
+# Check
+sapply(deg_names, function(x) colnames(get(x))[1])
+
+# Merging the DEG result files with the relevant data from the Phaseolus vulgaris annotation file
+
+deg_names <- c(
+  "DEG_results_BL_vs_BZ_TimepointA",
+  "DEG_results_BL_vs_ET_TimepointA",
+  "DEG_results_BZ_vs_ET_TimepointA",
+  "DEG_results_BL_vs_BZ_TimepointB",
+  "DEG_results_BL_vs_ET_TimepointB",
+  "DEG_results_BZ_vs_ET_TimepointB"
+)
+
+
+# Keep only the relevant columns
+annot_cols <- c(
+  "locusName", "transcriptName", "peptideName", "Pfam",
+  "Panther", "KOG", "KO", "GO", "at_name", "symbol", "protein"
+)
+
+Pvulgaris_annotation <- Pvulgaris_annotation[, annot_cols]
+
+# Create a version of annotation without the "Phvul." prefix for matching
+Pvulgaris_annotation$gene_id <- gsub("^Phvul\\.", "", Pvulgaris_annotation$locusName)
+
+# Merge!
+merge_with_annotation <- function(df, annotation) {
+  # Merge DEG table with annotation
+  merged <- merge(df, annotation, by = "gene_id", all.x = TRUE)
+  
+  # Reorder columns
+  ordered_cols <- c(
+    "gene_id", "baseMean", "log2FoldChange", "lfcSE", "stat", "pvalue", "padj",
+    "locusName", "transcriptName", "peptideName", "Pfam", "Panther",
+    "KOG", "KO", "GO", "at_name", "symbol", "protein"
+  )
+  merged <- merged[, intersect(ordered_cols, colnames(merged))]
+  
+  return(merged)
+}
+
+# APPLY TO ALL DEG TABLES 
+annotated_list <- lapply(deg_names, function(n) {
+  df <- get(n)
+  merge_with_annotation(df, Pvulgaris_annotation)
+})
+
+names(annotated_list) <- deg_names
+
+# assign each annotated table back into the environment
+for (n in deg_names) {
+  assign(paste0(n, "_annotated"), annotated_list[[n]], envir = .GlobalEnv)
+}
+
+# Check that it worked!
+lapply(annotated_list, function(x) head(x[, c("gene_id", "symbol", "protein")]))
+
+# Now we move on, using the annotated DEG results
+# Use the annotated DEG tables as canonical source
+deg_names <- c(
+  "DEG_results_BL_vs_BZ_TimepointA_annotated",
+  "DEG_results_BL_vs_ET_TimepointA_annotated",
+  "DEG_results_BZ_vs_ET_TimepointA_annotated",
+  "DEG_results_BL_vs_BZ_TimepointB_annotated",
+  "DEG_results_BL_vs_ET_TimepointB_annotated",
+  "DEG_results_BZ_vs_ET_TimepointB_annotated"
+)
+
+annotated_list <- lapply(deg_names, get)
+names(annotated_list) <- deg_names
+
+# Extract significant DEGs 
+get_deg_ids <- function(df, alpha = padj_cutoff, lfc = lfc_cutoff) {
+  df %>%
+    filter(!is.na(padj) & padj < alpha & abs(log2FoldChange) > lfc) %>%
+    pull(gene_id)
+}
+
+# Compute DEG counts 
+count_up_down <- function(df, alpha = padj_cutoff, lfc = lfc_cutoff) {
+  up <- sum(df$log2FoldChange > lfc & df$padj < alpha, na.rm = TRUE)
+  down <- sum(df$log2FoldChange < -lfc & df$padj < alpha, na.rm = TRUE)
+  c(up = up, down = down)
+}
+
+counts_summary <- lapply(annotated_list, count_up_down) %>%
+  bind_rows() %>%
+  mutate(
+    Comparison = rep(c("BL-BZ","BL-ET","BZ-ET"), 2),
+    Timepoint  = rep(c("A","B"), each = 3)
+  )
+
+# Prepare for Venn diagrams 
+timepoints <- list(
+  A = annotated_list[grep("_TimepointA_", names(annotated_list))],
+  B = annotated_list[grep("_TimepointB_", names(annotated_list))]
+)
+
+venn_lists <- lapply(timepoints, function(tlist) {
+  lapply(tlist, get_deg_ids)
+})
+
+short_names <- c("BL-BZ", "BL-ET", "BZ-ET")
+names(venn_lists$A) <- short_names
+names(venn_lists$B) <- short_names
+
+# Plot Venn diagrams 
+p_venn_A <- ggvenn(venn_lists$A, fill_color = NA, stroke_size = 1, set_name_size = 4, text_size = 4) +
+  labs(title = "DEG Overlap - Timepoint A")
+p_venn_B <- ggvenn(venn_lists$B, fill_color = NA, stroke_size = 1, set_name_size = 4, text_size = 4) +
+  labs(title = "DEG Overlap - Timepoint B")
+print(p_venn_A)
+print(p_venn_B)
+
+# Build gene2GO table 
+get_gene2go <- function(df) {
+  df %>%
+    select(gene_id, GO) %>%
+    filter(!is.na(GO), nzchar(GO)) %>%
+    separate_rows(GO, sep = ",") %>%
+    mutate(GO = trimws(GO)) %>%
+    filter(grepl("^GO:\\d{7}$", GO)) %>%
+    distinct(gene_id, GO)
+}
+
+gene2go <- bind_rows(
+  lapply(annotated_list, function(df) {
+    df %>%
+      dplyr::select(gene_id, GO) %>%   # explicitly dplyr::select
+      dplyr::filter(!is.na(GO), nzchar(GO)) %>%
+      tidyr::separate_rows(GO, sep = ",") %>%
+      dplyr::mutate(GO = trimws(GO)) %>%
+      dplyr::filter(grepl("^GO:\\d{7}$", GO)) %>%
+      dplyr::distinct(gene_id, GO)
+  })
+) %>% dplyr::distinct()
+
+# GO → TERM mapping 
+go_map <- AnnotationDbi::select(
+  GO.db,
+  keys = unique(gene2go$GO),
+  columns = "TERM",
+  keytype = "GOID"
+) %>%
+  distinct(GOID, TERM) %>%
+  rename(GO = GOID, term_name = TERM)
+
+# GO enrichment 
+gene_universe <- unique(gene2go$gene_id)
+
+enrich_go <- function(deg_ids, gene2go, universe, go_map) {
+  deg_ids <- intersect(deg_ids, universe)
+  if(length(deg_ids) == 0) return(tibble())
+  
+  go_to_genes <- split(gene2go$gene_id, gene2go$GO)
+  
+  res <- lapply(names(go_to_genes), function(go) {
+    S <- intersect(go_to_genes[[go]], universe)
+    a <- length(intersect(deg_ids, S))
+    b <- length(deg_ids) - a
+    c <- length(S) - a
+    d <- length(universe) - (a + b + c)
+    p <- fisher.test(matrix(c(a,b,c,d), nrow = 2), alternative = "greater")$p.value
+    tibble(GO = go, k_in_deg = a, size_go = length(S), pvalue = p)
+  }) %>% bind_rows()
+  
+  res %>%
+    mutate(padj = p.adjust(pvalue, method = "BH")) %>%
+    left_join(go_map, by = "GO") %>%
+    arrange(padj, pvalue)
+}
+
+# Plot top GO terms
+short_label <- function(x, maxlen = 60) {
+  ifelse(nchar(x) > maxlen, paste0(substr(x, 1, maxlen-3), "..."), x)
+}
+
+plot_top_GO <- function(ego_df, comparison, timepoint, topN = 10) {
+  ego_top <- ego_df %>%
+    filter(!is.na(term_name)) %>%
+    slice_head(n = topN) %>%
+    mutate(
+      minus_log10_fdr = -log10(padj + 1e-300),
+      term_name_plot = short_label(term_name)
+    )
+  
+  ggplot(ego_top, aes(x = minus_log10_fdr, y = reorder(term_name_plot, minus_log10_fdr))) +
+    geom_col(fill = "steelblue") +
+    labs(
+      x = expression(-log[10]~FDR),
+      y = NULL,
+      title = paste0("GO enrichment: ", comparison, " (Timepoint ", timepoint, ")")
+    ) +
+    theme_minimal(base_size = 12)
+}
+
+# GO plots, comparing BL vs BZ
+comparison <- "BL_vs_BZ"
+degA <- get_deg_ids(annotated_list[[paste0("DEG_results_", comparison, "_TimepointA_annotated")]])
+degB <- get_deg_ids(annotated_list[[paste0("DEG_results_", comparison, "_TimepointB_annotated")]])
+
+egoA <- enrich_go(degA, gene2go, gene_universe, go_map)
+egoB <- enrich_go(degB, gene2go, gene_universe, go_map)
+
+pA <- plot_top_GO(egoA, comparison, "A", topN = topN)
+pB <- plot_top_GO(egoB, comparison, "B", topN = topN)
+
+# Combine GO plots
+pA / pB
