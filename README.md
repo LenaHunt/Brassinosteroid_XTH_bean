@@ -24,7 +24,7 @@ This includes:
 
 <br>
 
-The datasets for each of these codes can be found in **Data Files**.
+The datasets for each of these codes can be found in **Data Files** along with the Phaseolus vulgaris XTH gene nucleotide alignment.
 <br>
 <br>
 
